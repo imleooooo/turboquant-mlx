@@ -110,36 +110,46 @@ if _HAS_MLX:
             )
 
         def __call__(self, x: mx.array) -> mx.array:
-            if self._eager_dequant and self._weight_cache is not None:
-                W = mx.array(self._weight_cache)
-            else:
-                W_np = self._dequantize_numpy()
+            if self.variant == "prod" and self.tq_qjl_bits is not None:
+                # prod path: MSE dequant + QJL correction.
+                # Must not short-circuit through _weight_cache as that only
+                # contains the (bits-1)-bit MSE reconstruction without QJL.
+                W_np = (
+                    self._weight_cache
+                    if self._eager_dequant and self._weight_cache is not None
+                    else self._dequantize_numpy()
+                )
+                data = self._get_numpy_data()
+                x_np = np.array(x.astype(mx.float32))   # (..., in_features)
+                batch_shape = x_np.shape[:-1]
+                flat = x_np.reshape(-1, self.in_features)  # (B, in_features)
 
-                if self.variant == "prod" and self.tq_qjl_bits is not None:
-                    # Add QJL correction per output neuron
-                    data = self._get_numpy_data()
-                    x_np = np.array(x.astype(mx.float32))
-                    signs_qjl = data["tq_qjl_signs"]
-                    qjl_bits = data["tq_qjl_bits"]
-                    res_norms = data["tq_res_norms"]
+                signs_qjl = data["tq_qjl_signs"]
+                qjl_bits = data["tq_qjl_bits"]
+                res_norms = data["tq_res_norms"]
 
-                    # Compute SRHT(x) once
-                    Hx = apply_srht(x_np.ravel(), signs_qjl, self.block_size)[:self.in_features]
-
+                out_flat = np.empty((flat.shape[0], self.out_features), dtype=np.float32)
+                for b in range(flat.shape[0]):
+                    vec = flat[b]
+                    Hx = apply_srht(vec, signs_qjl, self.block_size)[:self.in_features]
                     corrections = np.array([
                         estimate_inner_product_qjl(
-                            x_np.ravel(), Hx, qjl_bits[i], float(res_norms[i]), self.in_features
+                            vec, Hx, qjl_bits[i], float(res_norms[i]), self.in_features
                         )
                         for i in range(self.out_features)
                     ], dtype=np.float32)
+                    out_flat[b] = W_np @ vec + corrections
 
-                    out_np = W_np @ x_np.ravel() + corrections
-                    result = mx.array(out_np)
-                    if self.bias is not None:
-                        result = result + self.bias
-                    return result.reshape(x.shape[:-1] + (self.out_features,))
+                result = mx.array(out_flat.reshape(batch_shape + (self.out_features,)))
+                if self.bias is not None:
+                    result = result + self.bias
+                return result
 
-                W = mx.array(W_np)
+            # mse path (or prod without QJL data — fallback)
+            if self._eager_dequant and self._weight_cache is not None:
+                W = mx.array(self._weight_cache)
+            else:
+                W = mx.array(self._dequantize_numpy())
 
             result = x @ W.T
             if self.bias is not None:

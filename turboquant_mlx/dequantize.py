@@ -115,4 +115,7 @@ def estimate_inner_product_qjl(
     sign_x[sign_x == 0] = 1.0
     corr = float(np.dot(sign_r, sign_x)) / in_dim
     x_norm = float(np.linalg.norm(x))
-    return (np.pi / 2.0) * float(res_norm) * x_norm * corr
+    # Invert: corr = (2/π) arcsin(cos_sim)  =>  cos_sim = sin((π/2) * corr)
+    # Then r_i · x = cos_sim * ||r_i|| * ||x||
+    cos_sim = float(np.sin((np.pi / 2.0) * corr))
+    return cos_sim * float(res_norm) * x_norm
