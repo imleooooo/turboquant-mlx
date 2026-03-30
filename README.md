@@ -109,7 +109,14 @@ output = tq_layer(x)
 
 ## Output format
 
-The quantized model is saved as standard safetensors files with an updated `config.json`. Each quantized linear layer's `.weight` tensor is replaced by:
+> **Note:** The output directory is **not** a standard MLX model directory.
+> Quantized linear layers no longer have `.weight` tensors — they are replaced
+> by `.tq_*` arrays that existing MLX/mlx-lm loaders cannot consume.
+> To run inference you must reconstruct each layer using
+> `TurboQuantLinear.from_weights_dict()` (see [Loading for inference](#loading-for-inference)).
+
+The output contains safetensors files and an updated `config.json`.
+Each quantized linear layer's `.weight` tensor is replaced by:
 
 | Tensor | dtype | Description |
 |---|---|---|
@@ -132,6 +139,47 @@ The quantized model is saved as standard safetensors files with an updated `conf
   }
 }
 ```
+
+## Loading for inference
+
+Because the output uses a custom serialization, you must load the saved weights
+and reconstruct `TurboQuantLinear` layers manually before running inference.
+A minimal example:
+
+```python
+import numpy as np
+from pathlib import Path
+from turboquant_mlx.model_io import load_quantized_weights
+from turboquant_mlx.layers import TurboQuantLinear
+
+weights, config = load_quantized_weights(Path("./llama-3-8b-tq4"))
+q = config["quantization"]
+bits, variant, block_size = q["bits"], q["variant"], q["block_size"]
+
+# Reconstruct a single layer (e.g. model.layers.0.self_attn.q_proj)
+prefix = "model.layers.0.self_attn.q_proj"
+layer_weights = {
+    k.removeprefix(prefix + "."): v
+    for k, v in weights.items()
+    if k.startswith(prefix + ".tq_")
+}
+bias = weights.get(prefix + ".bias")
+
+tq_layer = TurboQuantLinear.from_weights_dict(
+    in_features=4096,
+    out_features=4096,
+    weights=layer_weights,
+    bits=bits,
+    variant=variant,
+    block_size=block_size,
+    bias=bias,
+)
+
+output = tq_layer(x)  # x: mx.array of shape (..., in_features)
+```
+
+A full model loader that wires all layers into an existing MLX model graph is
+not yet included in this repository.
 
 ## Layers quantized
 
