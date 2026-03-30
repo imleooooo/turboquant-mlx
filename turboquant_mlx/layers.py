@@ -121,6 +121,11 @@ if _HAS_MLX:
                 )
                 data = self._get_numpy_data()
                 x_np = np.array(x.astype(mx.float32))   # (..., in_features)
+                if x_np.shape[-1] != self.in_features:
+                    raise ValueError(
+                        f"TurboQuantLinear expected last dim {self.in_features}, "
+                        f"got {x_np.shape}"
+                    )
                 batch_shape = x_np.shape[:-1]
                 flat = x_np.reshape(-1, self.in_features)  # (B, in_features)
 
